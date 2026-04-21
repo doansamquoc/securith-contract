@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0
-pragma solidity 0.8.34;
+pragma solidity >=0.8.0 <0.9.0;
 
-contract SecurePoll {
+contract Polls {
     enum PollStatus {
         Upcoming,
         Open,
@@ -119,7 +119,9 @@ contract SecurePoll {
         newPoll.description = _desc;
         newPoll.startsAt = _startsAt;
         newPoll.endsAt = _settings.noDeadline ? 0 : _endsAt;
-        newPoll.options = _options;
+        for (uint i = 0; i < _options.length; i++) {
+            newPoll.options.push(_options[i]);
+        }
         newPoll.pollVotes = 0;
         newPoll.settings = _settings;
 
