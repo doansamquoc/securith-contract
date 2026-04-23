@@ -28,10 +28,12 @@ contract Polls {
         string title;
         string description;
         uint256 startsAt;
-        uint256 endsAt;
+        uint256 endsAt; // 0 if no deadline, 1 if closed by creator
         string[] options;
         uint256 pollVotes;
         PollSettings settings;
+        uint256 createdAt;
+        bool isDeleted;
     }
 
     struct PollSummary {
@@ -40,6 +42,9 @@ contract Polls {
         string title;
         uint256 pollVotes;
         PollStatus status;
+        uint256 startsAt;
+        uint256 endsAt;
+        uint256 createdAt;
     }
 
     struct PollDetails {
@@ -53,6 +58,7 @@ contract Polls {
         PollSettings settings;
         bool hasVoted;
         uint256[] votedIndices;
+        uint256 createdAt;
     }
 
     struct OptionResult {
@@ -96,6 +102,7 @@ contract Polls {
 
     error AccessDenied();
     error PollAlreadyClosed();
+    error PollNotClosed();
 
     function createPoll(
         string calldata _title,
@@ -124,6 +131,8 @@ contract Polls {
         }
         newPoll.pollVotes = 0;
         newPoll.settings = _settings;
+        newPoll.createdAt = block.timestamp;
+        newPoll.isDeleted = false;
 
         UserPolls[msg.sender].push(pollId);
         emit PollCreated(msg.sender, pollId);
@@ -139,13 +148,16 @@ contract Polls {
         for (uint256 i = 0; i < count; i++) {
             uint256 id = ids[i];
             Poll storage poll = polls[id];
-
+            if (poll.isDeleted) continue;
             summaries[i] = PollSummary({
                 creator: poll.creator,
                 id: id,
                 title: poll.title,
                 pollVotes: poll.pollVotes,
-                status: getStatus(poll)
+                status: getStatus(poll),
+                startsAt: poll.startsAt,
+                endsAt: poll.endsAt,
+                createdAt: poll.createdAt
             });
         }
 
@@ -168,11 +180,15 @@ contract Polls {
                 pollVotes: poll.pollVotes,
                 settings: poll.settings,
                 hasVoted: hasVoted[_pollId][msg.sender],
-                votedIndices: votedIndices[_pollId][msg.sender]
+                votedIndices: votedIndices[_pollId][msg.sender],
+                createdAt: poll.createdAt
             });
     }
 
-    function vote(uint256 _pollId, uint256[] calldata _optionIndices) external {
+    function caseVote(
+        uint256 _pollId,
+        uint256[] calldata _optionIndices
+    ) external {
         Poll storage poll = getPoll(_pollId);
 
         if (getStatus(poll) != PollStatus.Open) revert PollNotOpen();
@@ -198,6 +214,8 @@ contract Polls {
 
         poll.pollVotes++;
         hasVoted[_pollId][msg.sender] = true;
+        UserPolls[msg.sender].push(_pollId); // Add poll to user's voted polls
+        votedIndices[_pollId][msg.sender] = _optionIndices; // Store the indices of the options voted by the user
 
         emit Voted(msg.sender, _pollId, _optionIndices);
     }
@@ -209,6 +227,14 @@ contract Polls {
         poll.endsAt = 1;
 
         emit PollClosed(msg.sender, _pollId);
+    }
+
+    function deletePoll(uint256 _pollId) external {
+        Poll storage poll = getPoll(_pollId);
+        if (poll.creator != msg.sender) revert AccessDenied();
+        if (getStatus(poll) != PollStatus.Closed) revert PollNotClosed();
+
+        poll.isDeleted = true;
     }
 
     function getOptionsResult(
@@ -229,6 +255,7 @@ contract Polls {
     function getPoll(uint256 _pollId) internal view returns (Poll storage) {
         if (_pollId >= polls.length) revert PollNotFound(_pollId);
         Poll storage poll = polls[_pollId];
+        if (poll.isDeleted) revert PollNotFound(_pollId);
         return poll;
     }
 
