@@ -53,12 +53,18 @@ contract Polls {
         string description;
         uint256 startsAt;
         uint256 endsAt;
-        OptionResult[] options;
+        string[] options;
         uint256 pollVotes;
+        PollStatus status;
         PollSettings settings;
         bool hasVoted;
         uint256[] votedIndices;
         uint256 createdAt;
+    }
+
+    struct PollResults {
+        uint256 pollVotes;
+        OptionResult[] optionsResult;
     }
 
     struct OptionResult {
@@ -77,7 +83,11 @@ contract Polls {
 
     event PollCreated(address indexed creator, uint256 indexed pollId);
     event PollClosed(address indexed creator, uint256 indexed pollId);
-    event Voted(address indexed voter, uint256 pollId, uint256[] optionIndices);
+    event VoteCast(
+        address indexed voter,
+        uint256 pollId,
+        uint256[] optionIndices
+    );
 
     error TitleTooShort();
     error TitleTooLarge();
@@ -103,6 +113,8 @@ contract Polls {
     error AccessDenied();
     error PollAlreadyClosed();
     error PollNotClosed();
+    error IncorrectPassword();
+    error PollMustHavePassword();
 
     function createPoll(
         string calldata _title,
@@ -126,21 +138,23 @@ contract Polls {
         newPoll.description = _desc;
         newPoll.startsAt = _startsAt;
         newPoll.endsAt = _settings.noDeadline ? 0 : _endsAt;
-        for (uint i = 0; i < _options.length; i++) {
-            newPoll.options.push(_options[i]);
-        }
         newPoll.pollVotes = 0;
         newPoll.settings = _settings;
         newPoll.createdAt = block.timestamp;
         newPoll.isDeleted = false;
+        for (uint i = 0; i < _options.length; i++) {
+            newPoll.options.push(_options[i]);
+        }
 
         UserPolls[msg.sender].push(pollId);
         emit PollCreated(msg.sender, pollId);
         return pollId;
     }
 
-    function getPollSummaries() public view returns (PollSummary[] memory) {
-        uint256[] storage ids = UserPolls[msg.sender];
+    function getPollSummaries(
+        address _user
+    ) public view returns (PollSummary[] memory) {
+        uint256[] storage ids = UserPolls[_user];
         uint256 count = ids.length;
 
         PollSummary[] memory summaries = new PollSummary[](count);
@@ -165,6 +179,7 @@ contract Polls {
     }
 
     function getPollDetails(
+        address _voter,
         uint256 _pollId
     ) external view returns (PollDetails memory) {
         Poll storage poll = getPoll(_pollId);
@@ -176,16 +191,57 @@ contract Polls {
                 description: poll.description,
                 startsAt: poll.startsAt,
                 endsAt: poll.endsAt,
-                options: getOptionsResult(poll),
+                options: poll.options,
                 pollVotes: poll.pollVotes,
                 settings: poll.settings,
-                hasVoted: hasVoted[_pollId][msg.sender],
-                votedIndices: votedIndices[_pollId][msg.sender],
-                createdAt: poll.createdAt
+                hasVoted: hasVoted[_pollId][_voter],
+                votedIndices: votedIndices[_pollId][_voter],
+                createdAt: poll.createdAt,
+                status: getStatus(poll)
             });
     }
 
-    function caseVote(
+    function getPollResults(
+        uint256 _pollId,
+        address _voter
+    ) external view returns (PollResults memory) {
+        Poll storage poll = getPoll(_pollId);
+
+        if (!shouldShowResults(poll, _voter)) revert AccessDenied();
+
+        OptionResult[] memory optionsResult = getOptionsResult(poll);
+
+        return
+            PollResults({
+                optionsResult: optionsResult,
+                pollVotes: poll.pollVotes
+            });
+    }
+
+    function shouldShowResults(
+        Poll memory _poll,
+        address _voter
+    ) internal view returns (bool) {
+        if (_poll.settings.resultVisibility == PollResultVisibility.Never) {
+            return false;
+        }
+        if (
+            _poll.settings.resultVisibility == PollResultVisibility.AfterVote &&
+            !hasVoted[_poll.id][_voter]
+        ) {
+            return false;
+        }
+        if (
+            _poll.settings.resultVisibility == PollResultVisibility.AfterEnd &&
+            getStatus(_poll) != PollStatus.Ended &&
+            getStatus(_poll) != PollStatus.Closed
+        ) {
+            return false;
+        }
+        return true;
+    }
+
+    function castVote(
         uint256 _pollId,
         uint256[] calldata _optionIndices
     ) external {
@@ -217,7 +273,7 @@ contract Polls {
         UserPolls[msg.sender].push(_pollId); // Add poll to user's voted polls
         votedIndices[_pollId][msg.sender] = _optionIndices; // Store the indices of the options voted by the user
 
-        emit Voted(msg.sender, _pollId, _optionIndices);
+        emit VoteCast(msg.sender, _pollId, _optionIndices);
     }
 
     function closePoll(uint256 _pollId) external {
